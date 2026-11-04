@@ -23,9 +23,18 @@ macOS/Linux için `source .venv/bin/activate` kullanın.
 - Ateş: `Space` veya sol tık, ekrandaki ilk kelimeye mermi yollar.
 - Çıkış: `Esc`.
 - Skor: Kelime tamamlandıkça puan eklenir; patlama efekti gösterilir.
+- Dalgalar: Her dalgada yeterli kelime yok edilince sonraki dalgaya geçilir; kelimeler zorlaşır ve hızlanır.
+- Can: Gezegene ulaşan her kelime gemiye hasar verir; can bitince oyun biter, `R` ile yeniden başlanır.
+- Rekor: En yüksek skor `highscore.txt` dosyasında saklanır.
+
+## Testler
+```bash
+pip install pytest
+python -m pytest -q
+```
 
 ## Durum
-- Geliştirme aşamasında: Dalga geçişleri, menüler ve denge ayarları henüz basit. Şu an PC’de çalışır, mobil/web paketleme yapılmıyor.
+- Geliştirme aşamasında: Menüler ve denge ayarları henüz basit. Şu an PC’de çalışır, mobil/web paketleme yapılmıyor.
 
 ## Sorun Giderme
 - Pencere açılmazsa veya ses/görüntü sorunları varsa `pygame`’i yeniden kurun: `pip install --upgrade pygame`.
