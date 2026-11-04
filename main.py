@@ -1,5 +1,6 @@
 import random
 import math
+import os
 import pygame
 import sys
 import asyncio
@@ -12,6 +13,9 @@ pygame.init()
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 FPS = 60
+
+# Gezegene ulaşan her kelimenin gemiye verdiği hasar
+WORD_DAMAGE = 20
 
 # Renkler (Neon teması)
 COLOR_BG = (5, 10, 40)
@@ -36,6 +40,23 @@ RUSSIAN_WORDS = {
     7: ["Космический", "Астронавт", "Орбита", "Гравитация", "Чёрная дыра"],
     8: ["Космология", "Релятивизм", "Квантовая", "Физика", "Астрономия"]
 }
+
+# Rekor, oyunun yanındaki dosyada saklanır
+HIGHSCORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "highscore.txt")
+
+def load_highscore(path=None):
+    try:
+        with open(path or HIGHSCORE_FILE, encoding="utf-8") as f:
+            return int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+def save_highscore(score, path=None):
+    try:
+        with open(path or HIGHSCORE_FILE, "w", encoding="utf-8") as f:
+            f.write(str(score))
+    except OSError:
+        pass  # Yazılamayan ortamlarda (ör. web) rekor kaydedilmez
 
 # Dalga başına kelime sayısı (İlk dalga 10, her dalga +5)
 def get_wave_word_count(wave):
@@ -581,9 +602,22 @@ class GameManager:
             self.font_medium = pygame.font.Font(None, 48)
             self.font_small = pygame.font.Font(None, 28)
 
+        self.spawn_interval = FPS * 2  # Yaklaşık 2 saniyede bir yeni kelime
+        self.highscore = load_highscore()
+        self.reset()
+
+        # Yıldızlar
+        self.stars = [Star(random.randint(0, SCREEN_WIDTH), 
+                          random.randint(0, SCREEN_HEIGHT), 
+                          random.uniform(0.3, 1.2)) for _ in range(80)]
+
+    def reset(self):
+        """Yeni oyun için durumu sıfırla"""
         self.state = GameState.PLAYING
         self.score = 0
         self.wave = 1
+        self.wave_destroyed = 0  # Bu dalgada yok edilen kelime sayısı
+        self.wave_message = None
 
         # Oyuncu ve savaş bileşenleri
         self.player = Player(SCREEN_WIDTH // 2 - 20, SCREEN_HEIGHT - 140, ShipType.NEON_HUNTER)
@@ -592,15 +626,16 @@ class GameManager:
 
         # Kelimeler
         self.words = []
-        self.spawn_interval = FPS * 2  # Yaklaşık 2 saniyede bir yeni kelime
         self.spawn_timer = 0
         self.current_input = ""
         self.wave_word_pool = []  # Bu dalgada tekrar etmemek için havuz
 
-        # Yıldızlar
-        self.stars = [Star(random.randint(0, SCREEN_WIDTH), 
-                          random.randint(0, SCREEN_HEIGHT), 
-                          random.uniform(0.3, 1.2)) for _ in range(80)]
+    def game_over(self):
+        """Gemi yok oldu"""
+        self.state = GameState.GAME_OVER
+        if self.score > self.highscore:
+            self.highscore = self.score
+            save_highscore(self.highscore)
 
     def spawn_word(self):
         """Yeni bir kelime oluştur"""
@@ -612,6 +647,23 @@ class GameManager:
         x = random.randint(50, SCREEN_WIDTH - 150)
         y = -40
         self.words.append(Word(text, x, y, self.wave))
+
+    def destroy_word(self, word):
+        """Kelimeyi yok et, puan ver ve dalga ilerlemesini say"""
+        self.score += len(word.text)
+        cx, cy = word.get_center()
+        self.particles.create_explosion(cx, cy, count=35)
+        self.words.remove(word)
+        self.wave_destroyed += 1
+        if self.wave_destroyed >= get_wave_word_count(self.wave):
+            self.next_wave()
+
+    def next_wave(self):
+        """Sonraki dalgaya geç"""
+        self.wave += 1
+        self.wave_destroyed = 0
+        self.wave_word_pool = []  # Yeni dalganın kelimeleriyle doldurulur
+        self.wave_message = WaveMessage(f"Dalga {self.wave}", self.font_medium)
 
     async def run(self):
         """Ana oyun döngüsü (asyncio ile)"""
@@ -632,6 +684,10 @@ class GameManager:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return False
+                if self.state == GameState.GAME_OVER:
+                    if event.key == pygame.K_r:
+                        self.reset()
+                    continue
                 if event.key == pygame.K_SPACE and self.words:
                     # En yakın kelimeye ateş et
                     target = self.words[0]
@@ -644,12 +700,10 @@ class GameManager:
                     for word in list(self.words):
                         if word.type_char(char):
                             if word.is_complete():
-                                self.score += len(word.text)
-                                cx, cy = word.get_center()
-                                self.particles.create_explosion(cx, cy, count=35)
-                                self.words.remove(word)
+                                self.destroy_word(word)
                             break
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.words:
+            if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.words
+                    and self.state == GameState.PLAYING):
                 target = self.words[0]
                 bullet = self.player.shoot(*target.get_center())
                 if bullet:
@@ -663,6 +717,13 @@ class GameManager:
         if self.state != GameState.PLAYING:
             return
 
+        # Dalga mesajı gösterilirken oyun bekler
+        if self.wave_message:
+            self.wave_message.update()
+            if self.wave_message.pause_game:
+                return
+            self.wave_message = None
+
         # Oyuncu cooldown/güncelleme
         self.player.update(None, None)
 
@@ -675,7 +736,12 @@ class GameManager:
         for word in list(self.words):
             word.update()
             if word.is_off_screen():
+                # Gezegene ulaşan kelime gemiye hasar verir
                 self.words.remove(word)
+                self.player.take_damage(WORD_DAMAGE)
+                if not self.player.is_alive():
+                    self.game_over()
+                    return
 
         # Mermiler ve çarpışmalar
         for bullet in list(self.bullets):
@@ -687,10 +753,7 @@ class GameManager:
                     hit_word = word
                     break
             if hit_word:
-                self.score += len(hit_word.text)
-                cx, cy = hit_word.get_center()
-                self.particles.create_explosion(cx, cy, count=35)
-                self.words.remove(hit_word)
+                self.destroy_word(hit_word)
                 bullet.hit = True
             if bullet.is_hit():
                 self.bullets.remove(bullet)
@@ -710,9 +773,42 @@ class GameManager:
         self.player.draw(self.screen)
         self.particles.draw(self.screen)
 
-        score_surface = self.font_small.render(f"Skor: {self.score}  Dalga: {self.wave}", True, COLOR_TEXT)
+        score_surface = self.font_small.render(f"Skor: {self.score}  Rekor: {self.highscore}  Dalga: {self.wave}", True, COLOR_TEXT)
         self.screen.blit(score_surface, (10, 10))
+
+        self.draw_health_bar()
+
+        if self.wave_message:
+            self.wave_message.draw(self.screen)
+        if self.state == GameState.GAME_OVER:
+            self.draw_game_over()
         pygame.display.flip()
+
+    def draw_health_bar(self):
+        """Sağ üstte gemi canı"""
+        width, height = 200, 16
+        x, y = SCREEN_WIDTH - width - 10, 14
+        filled = int(width * self.player.health / self.player.max_health)
+        pygame.draw.rect(self.screen, COLOR_HEALTH_BG, (x, y, width, height), border_radius=4)
+        if filled:
+            pygame.draw.rect(self.screen, COLOR_HEALTH, (x, y, filled, height), border_radius=4)
+
+    def draw_game_over(self):
+        """Oyun bitti ekranı"""
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        overlay.set_alpha(180)
+        overlay.fill((0, 0, 0))
+        self.screen.blit(overlay, (0, 0))
+        lines = [
+            (self.font_large, "OYUN BİTTİ", COLOR_ENEMY),
+            (self.font_small, f"Skor: {self.score}  Rekor: {self.highscore}  Dalga: {self.wave}", COLOR_TEXT),
+            (self.font_small, "R: Yeniden başla   Esc: Çıkış", COLOR_TEXT),
+        ]
+        y = SCREEN_HEIGHT // 2 - 80
+        for font, text, color in lines:
+            surface = font.render(text, True, color)
+            self.screen.blit(surface, surface.get_rect(center=(SCREEN_WIDTH // 2, y)))
+            y += 70
 
 # Oyunu başlat
 if __name__ == "__main__":
