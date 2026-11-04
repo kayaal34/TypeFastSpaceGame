@@ -1,5 +1,6 @@
 import random
 import math
+import os
 import pygame
 import sys
 import asyncio
@@ -39,6 +40,23 @@ RUSSIAN_WORDS = {
     7: ["Космический", "Астронавт", "Орбита", "Гравитация", "Чёрная дыра"],
     8: ["Космология", "Релятивизм", "Квантовая", "Физика", "Астрономия"]
 }
+
+# Rekor, oyunun yanındaki dosyada saklanır
+HIGHSCORE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "highscore.txt")
+
+def load_highscore(path=None):
+    try:
+        with open(path or HIGHSCORE_FILE, encoding="utf-8") as f:
+            return int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+def save_highscore(score, path=None):
+    try:
+        with open(path or HIGHSCORE_FILE, "w", encoding="utf-8") as f:
+            f.write(str(score))
+    except OSError:
+        pass  # Yazılamayan ortamlarda (ör. web) rekor kaydedilmez
 
 # Dalga başına kelime sayısı (İlk dalga 10, her dalga +5)
 def get_wave_word_count(wave):
@@ -585,6 +603,7 @@ class GameManager:
             self.font_small = pygame.font.Font(None, 28)
 
         self.spawn_interval = FPS * 2  # Yaklaşık 2 saniyede bir yeni kelime
+        self.highscore = load_highscore()
         self.reset()
 
         # Yıldızlar
@@ -614,6 +633,9 @@ class GameManager:
     def game_over(self):
         """Gemi yok oldu"""
         self.state = GameState.GAME_OVER
+        if self.score > self.highscore:
+            self.highscore = self.score
+            save_highscore(self.highscore)
 
     def spawn_word(self):
         """Yeni bir kelime oluştur"""
@@ -751,7 +773,7 @@ class GameManager:
         self.player.draw(self.screen)
         self.particles.draw(self.screen)
 
-        score_surface = self.font_small.render(f"Skor: {self.score}  Dalga: {self.wave}", True, COLOR_TEXT)
+        score_surface = self.font_small.render(f"Skor: {self.score}  Rekor: {self.highscore}  Dalga: {self.wave}", True, COLOR_TEXT)
         self.screen.blit(score_surface, (10, 10))
 
         self.draw_health_bar()
@@ -779,7 +801,7 @@ class GameManager:
         self.screen.blit(overlay, (0, 0))
         lines = [
             (self.font_large, "OYUN BİTTİ", COLOR_ENEMY),
-            (self.font_small, f"Skor: {self.score}  Dalga: {self.wave}", COLOR_TEXT),
+            (self.font_small, f"Skor: {self.score}  Rekor: {self.highscore}  Dalga: {self.wave}", COLOR_TEXT),
             (self.font_small, "R: Yeniden başla   Esc: Çıkış", COLOR_TEXT),
         ]
         y = SCREEN_HEIGHT // 2 - 80
