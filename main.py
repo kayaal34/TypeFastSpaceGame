@@ -584,6 +584,8 @@ class GameManager:
         self.state = GameState.PLAYING
         self.score = 0
         self.wave = 1
+        self.wave_destroyed = 0  # Bu dalgada yok edilen kelime sayısı
+        self.wave_message = None
 
         # Oyuncu ve savaş bileşenleri
         self.player = Player(SCREEN_WIDTH // 2 - 20, SCREEN_HEIGHT - 140, ShipType.NEON_HUNTER)
@@ -612,6 +614,23 @@ class GameManager:
         x = random.randint(50, SCREEN_WIDTH - 150)
         y = -40
         self.words.append(Word(text, x, y, self.wave))
+
+    def destroy_word(self, word):
+        """Kelimeyi yok et, puan ver ve dalga ilerlemesini say"""
+        self.score += len(word.text)
+        cx, cy = word.get_center()
+        self.particles.create_explosion(cx, cy, count=35)
+        self.words.remove(word)
+        self.wave_destroyed += 1
+        if self.wave_destroyed >= get_wave_word_count(self.wave):
+            self.next_wave()
+
+    def next_wave(self):
+        """Sonraki dalgaya geç"""
+        self.wave += 1
+        self.wave_destroyed = 0
+        self.wave_word_pool = []  # Yeni dalganın kelimeleriyle doldurulur
+        self.wave_message = WaveMessage(f"Dalga {self.wave}", self.font_medium)
 
     async def run(self):
         """Ana oyun döngüsü (asyncio ile)"""
@@ -644,10 +663,7 @@ class GameManager:
                     for word in list(self.words):
                         if word.type_char(char):
                             if word.is_complete():
-                                self.score += len(word.text)
-                                cx, cy = word.get_center()
-                                self.particles.create_explosion(cx, cy, count=35)
-                                self.words.remove(word)
+                                self.destroy_word(word)
                             break
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and self.words:
                 target = self.words[0]
@@ -662,6 +678,13 @@ class GameManager:
             star.update()
         if self.state != GameState.PLAYING:
             return
+
+        # Dalga mesajı gösterilirken oyun bekler
+        if self.wave_message:
+            self.wave_message.update()
+            if self.wave_message.pause_game:
+                return
+            self.wave_message = None
 
         # Oyuncu cooldown/güncelleme
         self.player.update(None, None)
@@ -687,10 +710,7 @@ class GameManager:
                     hit_word = word
                     break
             if hit_word:
-                self.score += len(hit_word.text)
-                cx, cy = hit_word.get_center()
-                self.particles.create_explosion(cx, cy, count=35)
-                self.words.remove(hit_word)
+                self.destroy_word(hit_word)
                 bullet.hit = True
             if bullet.is_hit():
                 self.bullets.remove(bullet)
@@ -712,6 +732,9 @@ class GameManager:
 
         score_surface = self.font_small.render(f"Skor: {self.score}  Dalga: {self.wave}", True, COLOR_TEXT)
         self.screen.blit(score_surface, (10, 10))
+
+        if self.wave_message:
+            self.wave_message.draw(self.screen)
         pygame.display.flip()
 
 # Oyunu başlat
